@@ -1,0 +1,411 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <!-- Viewport configurado para evitar zoom nativo do navegador ao tocar no celular -->
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>To-Do List de Nuvens</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            overflow: hidden;
+            background-color: #87CEEB; /* Azul céu */
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            touch-action: none; /* Previne os comportamentos de rolar/voltar do navegador em celulares */
+        }
+
+        #ui-container {
+            position: absolute;
+            top: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            z-index: 10;
+            background: rgba(255, 255, 255, 0.9);
+            padding: 10px 15px;
+            border-radius: 30px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+            display: flex;
+            gap: 10px;
+            width: 90%;
+            max-width: 450px;
+            box-sizing: border-box;
+        }
+
+        input[type="text"] {
+            padding: 10px 15px;
+            font-size: 16px;
+            border: 2px solid #ddd;
+            border-radius: 20px;
+            outline: none;
+            flex: 1; /* Permite que o campo ocupe o espaço restante na tela menor */
+            min-width: 0;
+            transition: border-color 0.3s;
+        }
+
+        input[type="text"]:focus {
+            border-color: #4CAF50;
+        }
+
+        button {
+            padding: 10px 20px;
+            font-size: 16px;
+            cursor: pointer;
+            border: none;
+            background: #4CAF50;
+            color: white;
+            border-radius: 20px;
+            font-weight: bold;
+            transition: background 0.3s, transform 0.1s;
+            white-space: nowrap; /* Evita quebra de texto no botão */
+        }
+
+        button:hover {
+            background: #45a049;
+        }
+
+        button:active {
+            transform: scale(0.95);
+        }
+
+        canvas {
+            display: block;
+            touch-action: none;
+        }
+    </style>
+</head>
+<body>
+
+    <div id="ui-container">
+        <input type="text" id="taskInput" placeholder="Escreva sua tarefa..." autocomplete="off">
+        <button id="addBtn">Adicionar</button>
+    </div>
+
+    <canvas id="cloudCanvas"></canvas>
+
+    <script>
+        const canvas = document.getElementById('cloudCanvas');
+        const ctx = canvas.getContext('2d');
+        
+        let centerX, centerY;
+        let zoom = 1;
+        
+        // Variáveis de câmera (Pan/Arrasto)
+        let offsetX = 0;
+        let offsetY = 0;
+
+        function resizeCanvas() {
+            canvas.width = window.innerWidth;
+            canvas.height = window.innerHeight;
+            centerX = canvas.width / 2;
+            centerY = canvas.height / 2;
+            recalculatePositions();
+            draw();
+        }
+        window.addEventListener('resize', resizeCanvas);
+
+        let clouds = [];
+        const spiralSpacing = 15; 
+
+        function getRandomPastelColor() {
+            const hue = Math.floor(Math.random() * 360);
+            return `hsl(${hue}, 70%, 85%)`;
+        }
+
+        function generateCloudShape(text) {
+            ctx.font = 'bold 14px sans-serif'; 
+            const textWidth = ctx.measureText(text).width;
+            
+            const padding = 45; 
+            const rx = Math.max(60, (textWidth / 2) + padding); 
+            const ry = Math.max(60, rx * 0.8); 
+
+            const bumps = [];
+            bumps.push({ isCenter: true, rx: rx, ry: ry }); 
+
+            const numMain = Math.max(6, Math.floor(8 * (rx + ry) / 160));
+            const angleStep = (Math.PI * 2) / numMain;
+            
+            const rMainBase = (rx + ry) / 2 * 0.25; 
+            const rSmallBase = rMainBase * 0.35;
+
+            for (let i = 0; i < numMain; i++) {
+                let rMain = rMainBase * (0.8 + Math.random() * 0.4); 
+                let a0 = i * angleStep;
+                
+                let distMainX = rx * 0.95;
+                let distMainY = ry * 0.95;
+
+                bumps.push({ dx: Math.cos(a0) * distMainX, dy: Math.sin(a0) * distMainY, r: rMain, isCenter: false });
+
+                let a1 = a0 + angleStep * 0.33 + (Math.random() - 0.5) * 0.15;
+                let rSmall1 = rSmallBase * (0.6 + Math.random() * 1.4);
+                bumps.push({ dx: Math.cos(a1) * rx, dy: Math.sin(a1) * ry, r: rSmall1, isCenter: false });
+
+                let a2 = a0 + angleStep * 0.66 + (Math.random() - 0.5) * 0.15;
+                let rSmall2 = rSmallBase * (0.6 + Math.random() * 1.4);
+                bumps.push({ dx: Math.cos(a2) * rx, dy: Math.sin(a2) * ry, r: rSmall2, isCenter: false });
+            }
+            return { bumps, rx, ry };
+        }
+
+        function calculatePosition(cloudRx, cloudRy, existingClouds) {
+            if (existingClouds.length === 0) return { x: centerX, y: centerY, theta: 0 };
+            
+            let testTheta = existingClouds[existingClouds.length - 1].theta; 
+            let nx, ny;
+            
+            while (true) {
+                nx = centerX + (spiralSpacing * testTheta) * Math.cos(testTheta);
+                ny = centerY + (spiralSpacing * testTheta) * Math.sin(testTheta);
+                
+                let hasOverlap = false;
+                for (let c of existingClouds) {
+                    let dx = Math.abs(nx - c.x);
+                    let dy = Math.abs(ny - c.y);
+                    
+                    let minDx = (cloudRx + c.rx) * 0.95; 
+                    let minDy = (cloudRy + c.ry) * 0.95;
+                    
+                    if (dx < minDx && dy < minDy) {
+                        hasOverlap = true;
+                        break;
+                    }
+                }
+                
+                if (!hasOverlap) { break; }
+                testTheta += 0.1;
+            }
+            return { x: nx, y: ny, theta: testTheta };
+        }
+
+        function addCloud(text) {
+            const shape = generateCloudShape(text);
+            const pos = calculatePosition(shape.rx, shape.ry, clouds);
+
+            clouds.push({
+                id: Date.now(),
+                text: text,
+                x: pos.x,
+                y: pos.y,
+                theta: pos.theta,
+                rx: shape.rx, ry: shape.ry,
+                completed: false, color: '#ffffff',
+                completedColor: getRandomPastelColor(), bumps: shape.bumps
+            });
+            draw();
+        }
+
+        function recalculatePositions() {
+            if(clouds.length === 0) return;
+            clouds[0].x = centerX; clouds[0].y = centerY; clouds[0].theta = 0;
+            for(let i = 1; i < clouds.length; i++) {
+                let pos = calculatePosition(clouds[i].rx, clouds[i].ry, clouds.slice(0, i));
+                clouds[i].x = pos.x; clouds[i].y = pos.y; clouds[i].theta = pos.theta;
+            }
+        }
+
+        function drawCloud(cloud) {
+            const fillColor = cloud.completed ? cloud.completedColor : cloud.color;
+            const strokeColor = '#b0c4de'; 
+            
+            ctx.fillStyle = strokeColor;
+            for(let b of cloud.bumps) {
+                ctx.beginPath();
+                if (b.isCenter) { ctx.ellipse(cloud.x, cloud.y, b.rx + 3, b.ry + 3, 0, 0, Math.PI * 2); } 
+                else { ctx.arc(cloud.x + b.dx, cloud.y + b.dy, b.r + 3, 0, Math.PI * 2); }
+                ctx.fill();
+            }
+            
+            ctx.fillStyle = fillColor;
+            for(let b of cloud.bumps) {
+                ctx.beginPath();
+                if (b.isCenter) { ctx.ellipse(cloud.x, cloud.y, b.rx, b.ry, 0, 0, Math.PI * 2); } 
+                else { ctx.arc(cloud.x + b.dx, cloud.y + b.dy, b.r, 0, Math.PI * 2); }
+                ctx.fill();
+            }
+            
+            ctx.fillStyle = cloud.completed ? '#555' : '#333';
+            ctx.font = 'bold 14px sans-serif';
+            ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+            
+            ctx.fillText(cloud.text, cloud.x, cloud.y);
+            if (cloud.completed) {
+                ctx.beginPath();
+                const textWidth = ctx.measureText(cloud.text).width;
+                ctx.moveTo(cloud.x - textWidth/2 - 2, cloud.y);
+                ctx.lineTo(cloud.x + textWidth/2 + 2, cloud.y);
+                ctx.strokeStyle = '#555'; ctx.lineWidth = 2; ctx.stroke();
+            }
+        }
+
+        function draw() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            
+            ctx.save();
+            // Adiciona o deslocamento de tela (offset) ao centro e aplica o zoom
+            ctx.translate(centerX + offsetX, centerY + offsetY);
+            ctx.scale(zoom, zoom);
+            ctx.translate(-centerX, -centerY);
+
+            for (let i = clouds.length - 1; i >= 0; i--) {
+                drawCloud(clouds[i]);
+            }
+            ctx.restore();
+        }
+
+        // ==========================================
+        //  SISTEMA DE INTERAÇÃO (Mouse e Touch)
+        // ==========================================
+        
+        let isDragging = false;
+        let dragStartX = 0, dragStartY = 0;
+        let initialOffsetX = 0, initialOffsetY = 0;
+        let clickTimeout = null;
+        
+        // Map para acompanhar múltiplos dedos na tela
+        const activePointers = new Map();
+        let initialPinchDistance = null;
+        let initialZoom = 1;
+
+        // Zoom pelo scroll do mouse (Desktop)
+        canvas.addEventListener('wheel', (e) => {
+            e.preventDefault(); 
+            const zoomSensitivity = 0.05;
+            if (e.deltaY < 0) { zoom += zoomSensitivity; } 
+            else { zoom -= zoomSensitivity; }
+            zoom = Math.max(0.1, Math.min(zoom, 3)); 
+            draw(); 
+        });
+
+        canvas.addEventListener('pointerdown', (e) => {
+            activePointers.set(e.pointerId, e);
+
+            if (activePointers.size === 1) {
+                // Inicia o arrasto da tela com um dedo / clique
+                isDragging = false;
+                dragStartX = e.clientX;
+                dragStartY = e.clientY;
+                initialOffsetX = offsetX;
+                initialOffsetY = offsetY;
+                canvas.setPointerCapture(e.pointerId);
+            } else if (activePointers.size === 2) {
+                // Inicia o Zoom de pinça (Dois dedos)
+                const pts = Array.from(activePointers.values());
+                initialPinchDistance = Math.hypot(pts[0].clientX - pts[1].clientX, pts[0].clientY - pts[1].clientY);
+                initialZoom = zoom;
+            }
+        });
+
+        canvas.addEventListener('pointermove', (e) => {
+            if (!activePointers.has(e.pointerId)) return;
+            activePointers.set(e.pointerId, e); // Atualiza posição
+
+            if (activePointers.size === 1) {
+                // Lógica de movimentar a tela (Pan)
+                const dx = e.clientX - dragStartX;
+                const dy = e.clientY - dragStartY;
+                
+                // Só considera "arrasto" se moveu mais de 5 pixels (evita tremores acidentais ao tentar clicar)
+                if (Math.hypot(dx, dy) > 5) {
+                    isDragging = true;
+                    offsetX = initialOffsetX + dx;
+                    offsetY = initialOffsetY + dy;
+                    draw();
+                }
+            } else if (activePointers.size === 2) {
+                // Lógica de Zoom na pinça celular
+                const pts = Array.from(activePointers.values());
+                const currentDist = Math.hypot(pts[0].clientX - pts[1].clientX, pts[0].clientY - pts[1].clientY);
+                
+                if (initialPinchDistance) {
+                    zoom = initialZoom * (currentDist / initialPinchDistance);
+                    zoom = Math.max(0.1, Math.min(zoom, 3));
+                    draw();
+                }
+            }
+        });
+
+        function handlePointerUp(e) {
+            activePointers.delete(e.pointerId);
+            if (activePointers.size < 2) { initialPinchDistance = null; }
+            
+            // Quando todos os dedos / cliques saem da tela
+            if (activePointers.size === 0) {
+                // Se o usuário não arrastou a tela, considera um "clique" na nuvem
+                if (!isDragging) {
+                    handleCanvasClick(e.clientX, e.clientY);
+                }
+                isDragging = false;
+            }
+        }
+
+        canvas.addEventListener('pointerup', handlePointerUp);
+        canvas.addEventListener('pointercancel', handlePointerUp);
+
+        // Dispara a lógica da nuvem caso seja um toque/clique estático
+        function handleCanvasClick(clientX, clientY) {
+            const rect = canvas.getBoundingClientRect();
+            const rawMouseX = clientX - rect.left;
+            const rawMouseY = clientY - rect.top;
+
+            // Transforma o clique físico de volta nas coordenadas da câmera
+            const logicalMouseX = (rawMouseX - centerX - offsetX) / zoom + centerX;
+            const logicalMouseY = (rawMouseY - centerY - offsetY) / zoom + centerY;
+
+            let clickedCloudIndex = -1;
+            for (let i = 0; i < clouds.length; i++) {
+                let c = clouds[i];
+                let dx = logicalMouseX - c.x;
+                let dy = logicalMouseY - c.y;
+                if ((dx * dx) / (c.rx * c.rx) + (dy * dy) / (c.ry * c.ry) <= 1.2) {
+                    clickedCloudIndex = i;
+                    break;
+                }
+            }
+
+            if (clickedCloudIndex !== -1) {
+                if (clickTimeout) {
+                    // Clique/Toque duplo
+                    clearTimeout(clickTimeout);
+                    clickTimeout = null;
+                    if (confirm(`Deseja remover a tarefa: "${clouds[clickedCloudIndex].text}"?`)) {
+                        clouds.splice(clickedCloudIndex, 1);
+                        recalculatePositions();
+                        draw();
+                    }
+                } else {
+                    // Primeiro clique - Aguarda para ver se será duplo (tolerância de 300ms)
+                    clickTimeout = setTimeout(() => {
+                        clouds[clickedCloudIndex].completed = !clouds[clickedCloudIndex].completed;
+                        draw();
+                        clickTimeout = null;
+                    }, 300);
+                }
+            }
+        }
+
+        // ==========================================
+        //  UI E TECLADO
+        // ==========================================
+
+        document.getElementById('addBtn').addEventListener('click', () => {
+            const input = document.getElementById('taskInput');
+            if (input.value.trim() !== '') {
+                addCloud(input.value.trim());
+                input.value = '';
+                input.focus();
+            }
+        });
+        
+        document.getElementById('taskInput').addEventListener('keypress', (e) => {
+            if(e.key === 'Enter') {
+                document.getElementById('addBtn').click();
+            }
+        });
+
+        resizeCanvas();
+
+    </script>
+</body>
+</html>
